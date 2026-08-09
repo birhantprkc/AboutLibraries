@@ -31,6 +31,7 @@ import java.io.InputStream
 
 internal class DependencyCollector(
     private val includePlatform: Boolean = false,
+    private val mergeVariants: Boolean = false,
 ) {
 
     /**
@@ -73,10 +74,20 @@ internal class DependencyCollector(
         destination: MutableSet<DependencyCoordinates>,
         seen: MutableSet<ComponentIdentifier>,
         depth: Int = 1,
+        rootModule: String? = null,
     ) {
         val id = root.id
+        // Non-null when this component is a pure Gradle `available-at` redirect (a KMP root module
+        // such as `androidx.collection:collection` pointing at `androidx.collection:collection-jvm`).
+        // With `mergeVariants` the shell itself is dropped and its module name is carried over to the
+        // platform artifact below, so the reported id matches the declared coordinate.
+        val redirectTarget = if (mergeVariants) root.redirectTargetModule() else null
         var ignoreSuffix: String? = null
         when {
+            redirectTarget != null -> {
+                ignoreSuffix = " merge variant into ${(id as ModuleComponentIdentifier).module}"
+            }
+
             id is ProjectComponentIdentifier -> {
                 ignoreSuffix = " skip project dependency" // Local dependency, do nothing.
             }
@@ -84,7 +95,7 @@ internal class DependencyCollector(
             root.isPlatform() -> {
                 if (includePlatform) {
                     if (id is ModuleComponentIdentifier) {
-                        destination += id.toDependencyCoordinates()
+                        destination += id.toDependencyCoordinates(rootModule)
                     } else {
                         LOGGER.error("Unknown platform dependency: $id")
                         ignoreSuffix = " skip platform" // Platform (POM) dependency, do nothing.
@@ -98,7 +109,7 @@ internal class DependencyCollector(
                 if (id.group == "" && id.version == "") {
                     ignoreSuffix = " skip flat-dir dependency" // Assuming flat-dir repository dependency, do nothing.
                 } else {
-                    destination += id.toDependencyCoordinates()
+                    destination += id.toDependencyCoordinates(rootModule)
                 }
             }
 
@@ -119,11 +130,13 @@ internal class DependencyCollector(
             if (dependency is ResolvedDependencyResult) {
                 val selected = dependency.selected
                 if (seen.add(selected.id)) {
+                    val childModule = (selected.id as? ModuleComponentIdentifier)?.module
                     loadDependencyCoordinates(
                         selected,
                         destination,
                         seen,
                         depth + 1,
+                        if (redirectTarget != null && childModule == redirectTarget) (id as ModuleComponentIdentifier).module else null,
                     )
                 }
             }
@@ -209,7 +222,10 @@ internal class DependencyCollector(
             LOGGER.debug("--> ArtifactPom for [{}:{}]:\n{}\n\n", pom.groupId, pom.artifactId, pom.pomFile.readText().trim())
         }
 
-        val uniqueId = pom.groupId + ":" + pom.artifactId
+        // With `mergeVariants` a KMP platform artifact is reported under the root coordinate it was
+        // resolved through, so the id matches what was declared in the build script. Everything else
+        // (name, description, licenses, …) still comes from the resolved variant's POM.
+        val uniqueId = pom.groupId + ":" + (coordinates.rootModule ?: pom.artifactId)
 
         // check if we shall skip this specific uniqueId
         if (shouldSkip(uniqueId)) return null
@@ -252,7 +268,25 @@ internal class DependencyCollector(
     private fun <T> chooseValue(pom: Model, parentRawModel: List<Model>, block: (Model) -> T?): T? =
         pom.let(block) ?: parentRawModel.firstOrNull()?.let(block)
 
-    private fun ModuleComponentIdentifier.toDependencyCoordinates() = DependencyCoordinates(group, module, version)
+    private fun ModuleComponentIdentifier.toDependencyCoordinates(rootModule: String? = null) =
+        DependencyCoordinates(group, module, version, rootModule?.takeIf { it != module })
+
+    /**
+     * Returns the module name this component redirects to via Gradle `available-at`
+     * (`androidx.collection:collection` → `collection-jvm`), or `null` if it is a regular module.
+     *
+     * A redirecting component carries no artifacts of its own — every one of its variants only
+     * points at a variant of the target module. Requiring *all* variants to redirect, and requiring
+     * a single target within the same group, keeps this from firing on regular modules.
+     */
+    private fun ResolvedComponentResult.redirectTargetModule(): String? {
+        val self = id as? ModuleComponentIdentifier ?: return null
+        val owners = runCatching {
+            variants.map { (it.externalVariant.orElse(null) ?: return null).owner }
+        }.getOrNull()?.takeIf { it.isNotEmpty() } ?: return null
+        val target = owners.distinct().singleOrNull() as? ModuleComponentIdentifier ?: return null
+        return target.module.takeIf { target.group == self.group && it != self.module }
+    }
 
     private fun ResolvedComponentResult.isPlatform(): Boolean {
         val singleVariant = variants.singleOrNull() ?: return false
@@ -303,6 +337,15 @@ internal data class DependencyCoordinates(
     val group: String,
     val artifact: String,
     val version: String,
+    /**
+     * Module name of the parent (root) module this artifact was resolved *through*, for Gradle
+     * `available-at` redirects as used by Kotlin Multiplatform publications
+     * (`androidx.collection:collection` → `androidx.collection:collection-jvm`).
+     *
+     * Only populated when `mergeVariants` is enabled; `null` otherwise, and always `null` for
+     * artifacts that were not reached via a redirect.
+     */
+    val rootModule: String? = null,
 ) : java.io.Serializable {
     fun pomCoordinate() = "$group:$artifact:$version@pom"
     fun cacheKey() = "$group:$artifact:$version"

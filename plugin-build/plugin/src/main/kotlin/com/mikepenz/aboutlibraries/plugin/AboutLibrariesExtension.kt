@@ -87,6 +87,7 @@ abstract class AboutLibrariesExtension {
             it.exclusionPatterns.convention(emptySet<Pattern>())
             it.duplicationMode.convention(DuplicateMode.MERGE)
             it.duplicationRule.convention(DuplicateRule.EXACT)
+            it.mergeVariants.convention(false)
         }
         license {
             it.mapLicensesToSpdx.convention(true)
@@ -422,6 +423,34 @@ abstract class LibraryConfig @Inject constructor() {
      */
     @get:Optional
     abstract val duplicationRule: Property<DuplicateRule>
+
+    /**
+     * Reports Kotlin Multiplatform platform artifacts under the root coordinate they were resolved
+     * through, instead of the resolved variant.
+     *
+     * A dependency declared as `com.mikepenz:aboutlibraries-compose-core` resolves to
+     * `com.mikepenz:aboutlibraries-compose-core-android` on Android. With this enabled the reported
+     * `uniqueId` is `com.mikepenz:aboutlibraries-compose-core` again, matching what the build script
+     * declares — which keeps `config` overrides and funding mappings keyed on the declared id.
+     *
+     * Only Gradle `available-at` redirects are collapsed; artifacts genuinely published under a
+     * suffixed coordinate (e.g. `androidx.annotation:annotation-jvm` when declared as such) are
+     * untouched. Metadata (name, description, licenses) still comes from the resolved variant.
+     *
+     * This is independent of [duplicationMode] / [duplicationRule] and applied before them.
+     *
+     * ```
+     * aboutLibraries {
+     *   library {
+     *      mergeVariants = true
+     *   }
+     * }
+     * ```
+     *
+     * @see duplicationMode
+     */
+    @get:Optional
+    abstract val mergeVariants: Property<Boolean>
 }
 
 abstract class LicenseConfig @Inject constructor() {

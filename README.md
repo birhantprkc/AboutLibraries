@@ -212,6 +212,9 @@ aboutLibraries {
         duplicationMode = com.mikepenz.aboutlibraries.plugin.DuplicateMode.MERGE
         // Configure the duplication rule, to match "duplicates" with
         duplicationRule = com.mikepenz.aboutlibraries.plugin.DuplicateRule.SIMPLE
+        // Report Kotlin Multiplatform artifacts under the declared root coordinate
+        // (`androidx.collection:collection` instead of `androidx.collection:collection-jvm`)
+        mergeVariants = true
     }
 }
 ```

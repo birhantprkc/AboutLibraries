@@ -62,7 +62,9 @@ internal class LibraryPostProcessor(
         val dependencyDataForVariant = if (variant.isNullOrBlank()) {
             variantToDependencyData.flatMap { (_, dependencies) -> dependencies }.deduplicateDependencies() ?: emptySet()
         } else {
-            variantToDependencyData[variant] ?: variantToDependencyData.flatMap { (configName, dependencies) ->
+            // deduplicate as well on an exact variant hit: with `mergeVariants` several resolved
+            // platform artifacts can collapse onto the same root uniqueId within one configuration.
+            variantToDependencyData[variant]?.deduplicateDependencies() ?: variantToDependencyData.flatMap { (configName, dependencies) ->
                 // if we don't have an exact match, use all variants starting with
                 val cleanedConfigName = configName.removeSuffix("CompileClasspath").removeSuffix("RuntimeClasspath")
                 if (cleanedConfigName == variant) dependencies else emptyList()
