@@ -82,6 +82,7 @@ class MergeVariantsFunctionalTest {
             """.trimIndent()
         )
 
+        @Suppress("WithPluginClasspathUsage")
         val result = GradleRunner.create()
             .withProjectDir(projectDir)
             .withPluginClasspath()
