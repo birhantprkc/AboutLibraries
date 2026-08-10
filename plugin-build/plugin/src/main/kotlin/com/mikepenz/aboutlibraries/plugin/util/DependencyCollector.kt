@@ -43,8 +43,17 @@ internal class DependencyCollector(
      */
     internal fun loadDependencyCoordinates(root: ResolvedComponentResult): Set<DependencyCoordinates> {
         val coordinates = mutableSetOf<DependencyCoordinates>()
-        loadDependencyCoordinates(root, coordinates, mutableSetOf())
-        return coordinates
+        // "group:platformArtifact" → module name of the redirect shell it is published under.
+        val redirects = mutableMapOf<String, String>()
+        loadDependencyCoordinates(root, coordinates, redirects, mutableSetOf())
+        if (redirects.isEmpty()) return coordinates
+        // Applied as a pass over the finished set rather than during the walk: a platform artifact
+        // can be reached directly (e.g. a dependency declaring `annotation-jvm`) before the shell
+        // that redirects to it is visited, and the graph walk order is not specified.
+        return coordinates.mapTo(mutableSetOf()) { coords ->
+            val rootModule = redirects["${coords.group}:${coords.artifact}"]
+            if (rootModule != null) coords.copy(rootModule = rootModule) else coords
+        }
     }
 
     /**
@@ -72,20 +81,22 @@ internal class DependencyCollector(
     private fun loadDependencyCoordinates(
         root: ResolvedComponentResult,
         destination: MutableSet<DependencyCoordinates>,
+        redirects: MutableMap<String, String>,
         seen: MutableSet<ComponentIdentifier>,
         depth: Int = 1,
-        rootModule: String? = null,
     ) {
         val id = root.id
         // Non-null when this component is a pure Gradle `available-at` redirect (a KMP root module
         // such as `androidx.collection:collection` pointing at `androidx.collection:collection-jvm`).
-        // With `mergeVariants` the shell itself is dropped and its module name is carried over to the
-        // platform artifact below, so the reported id matches the declared coordinate.
+        // With `mergeVariants` the shell itself is dropped and its module name is recorded, so the
+        // artifact it points at can be reported under the declared coordinate.
         val redirectTarget = if (mergeVariants) root.redirectTargetModule() else null
         var ignoreSuffix: String? = null
         when {
             redirectTarget != null -> {
-                ignoreSuffix = " merge variant into ${(id as ModuleComponentIdentifier).module}"
+                id as ModuleComponentIdentifier
+                redirects["${id.group}:$redirectTarget"] = id.module
+                ignoreSuffix = " merge variant $redirectTarget into ${id.module}"
             }
 
             id is ProjectComponentIdentifier -> {
@@ -95,7 +106,7 @@ internal class DependencyCollector(
             root.isPlatform() -> {
                 if (includePlatform) {
                     if (id is ModuleComponentIdentifier) {
-                        destination += id.toDependencyCoordinates(rootModule)
+                        destination += id.toDependencyCoordinates()
                     } else {
                         LOGGER.error("Unknown platform dependency: $id")
                         ignoreSuffix = " skip platform" // Platform (POM) dependency, do nothing.
@@ -109,7 +120,7 @@ internal class DependencyCollector(
                 if (id.group == "" && id.version == "") {
                     ignoreSuffix = " skip flat-dir dependency" // Assuming flat-dir repository dependency, do nothing.
                 } else {
-                    destination += id.toDependencyCoordinates(rootModule)
+                    destination += id.toDependencyCoordinates()
                 }
             }
 
@@ -130,13 +141,12 @@ internal class DependencyCollector(
             if (dependency is ResolvedDependencyResult) {
                 val selected = dependency.selected
                 if (seen.add(selected.id)) {
-                    val childModule = (selected.id as? ModuleComponentIdentifier)?.module
                     loadDependencyCoordinates(
                         selected,
                         destination,
+                        redirects,
                         seen,
                         depth + 1,
-                        if (redirectTarget != null && childModule == redirectTarget) (id as ModuleComponentIdentifier).module else null,
                     )
                 }
             }
@@ -268,8 +278,7 @@ internal class DependencyCollector(
     private fun <T> chooseValue(pom: Model, parentRawModel: List<Model>, block: (Model) -> T?): T? =
         pom.let(block) ?: parentRawModel.firstOrNull()?.let(block)
 
-    private fun ModuleComponentIdentifier.toDependencyCoordinates(rootModule: String? = null) =
-        DependencyCoordinates(group, module, version, rootModule?.takeIf { it != module })
+    private fun ModuleComponentIdentifier.toDependencyCoordinates() = DependencyCoordinates(group, module, version)
 
     /**
      * Returns the module name this component redirects to via Gradle `available-at`

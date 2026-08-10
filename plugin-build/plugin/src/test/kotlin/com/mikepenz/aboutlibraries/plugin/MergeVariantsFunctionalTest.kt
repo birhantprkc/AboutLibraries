@@ -23,12 +23,27 @@ class MergeVariantsFunctionalTest {
     lateinit var projectDir: File
 
     @Test
-    fun `root and resolved variant are both reported by default`() {
+    fun `root and resolved variant are both collected when merging is disabled`() {
         val json = runExport(mergeVariants = false)
 
-        // unchanged legacy behaviour: the redirect shell and the platform artifact are separate entries
+        // `duplicationMode = KEEP` (set by runExport) keeps both entries visible; with the default
+        // MERGE they are collapsed onto whichever of the two the graph walk happened to reach first
         assertTrue(json.contains("\"androidx.collection:collection-jvm\""), "Expected resolved variant id. Output:\n$json")
         assertTrue(json.contains("\"androidx.collection:collection\""), "Expected redirect shell id. Output:\n$json")
+    }
+
+    @Test
+    fun `variants are merged regardless of the order the graph is walked in`() {
+        // `annotation-jvm` is declared first, so it is reached directly before the `annotation`
+        // redirect shell that `collection` pulls in transitively. The merge must not depend on
+        // which path reaches the platform artifact first.
+        val json = runExport(
+            mergeVariants = true,
+            dependencies = listOf("androidx.annotation:annotation-jvm:1.9.1", "androidx.collection:collection:1.5.0"),
+        )
+
+        assertTrue(json.contains("\"androidx.annotation:annotation\""), "Expected declared root id. Output:\n$json")
+        assertFalse(json.contains("\"androidx.annotation:annotation-jvm\""), "Resolved variant id must be replaced. Output:\n$json")
     }
 
     @Test
