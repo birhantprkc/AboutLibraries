@@ -57,6 +57,18 @@ class MergeVariantsFunctionalTest {
     }
 
     @Test
+    fun `non-multiplatform dependency trees are byte-identical with and without merging`() {
+        // guards against the detection widening beyond `available-at` redirects: a plain JVM tree
+        // has no redirect shells at all, so enabling the option must be a no-op
+        val dependencies = listOf("com.google.code.gson:gson:2.11.0", "org.slf4j:slf4j-api:2.0.16")
+
+        val disabled = runExport(mergeVariants = false, dependencies = dependencies)
+        val enabled = runExport(mergeVariants = true, dependencies = dependencies)
+
+        assertEquals(disabled, enabled, "Merging must not alter output for non-KMP dependencies")
+    }
+
+    @Test
     fun `suffixed coordinates without a redirect are untouched when merging`() {
         // no KMP root module in the graph, so there is nothing to merge into — the `-jvm` suffix
         // must not be stripped by name
